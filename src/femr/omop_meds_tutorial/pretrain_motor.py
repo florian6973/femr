@@ -77,6 +77,13 @@ def create_arg_parser():
         type=str,
         default=None
     )
+    arg_parser.add_argument(
+        "--loss-level",
+        dest="loss_level",
+        choices=["batch", "sample"],
+        default="batch",
+        help="Compute loss at the 'batch' or 'sample' level."
+    )
     return arg_parser
 
 
@@ -178,7 +185,7 @@ def main():
     if args.loss:
         model.eval()
         random.seed(42)
-        k = 5000
+        k = 100 #5000
 
         # Randomly select k indices from train and val
         train_indices = random.sample(range(len(train_batches)), min(k, len(train_batches)))
@@ -189,8 +196,10 @@ def main():
         # subset_train_batches = train_batches
         # subset_val_batches = val_batches
 
-        train_loss_file = f'train_loss_all_{k}.npy'
-        val_loss_file = f'val_loss_all_{k}.npy'
+        train_loss_file = f'train_loss_{args.loss_level}_{k}.npy'
+        val_loss_file = f'val_loss_{args.loss_level}_{k}.npy'
+        train_representations_file = f'train_representations_{args.loss_level}_{k}.npy'
+        val_representations_file = f'val_representations_{args.loss_level}_{k}.npy'
 
         def to_device(data, device):
             if isinstance(data, dict):
@@ -202,35 +211,91 @@ def main():
 
         def compute_per_batch_losses(dataset, processor, model):
             losses = []
+            representations = []
             for i in tqdm(range(len(dataset))):
                 batch = processor.collate([dataset[i]])
                 batch = to_device(batch["batch"], model.device)
                 with torch.no_grad():
-                    loss, _ = model(batch)
+                    loss, result = model(batch, return_reprs=True)
                     if isinstance(loss, torch.Tensor):
                         losses.append(loss.item())
                     else:
                         losses.append(float(loss))
-            return np.array(losses)
+                    representations.append(result.get("representations", None).detach().cpu().numpy())
+            return np.array(losses), np.array(representations)
 
-        if not os.path.exists(train_loss_file):
-            print("Computing per-batch loss for train set (random k)...")
-            train_losses = compute_per_batch_losses(subset_train_batches, processor, model)
+        def compute_per_sample_losses(dataset, processor, model):
+            losses = []
+            representations = []
+            for i in tqdm(range(len(dataset))):
+                batch = processor.collate([dataset[i]])
+                batch = to_device(batch["batch"], model.device)
+                with torch.no_grad():
+                    loss, result = model(batch, return_reprs=True)
+                    per_sample_loss = result.get("per_sample_loss", None)
+                    if per_sample_loss is not None:
+                        losses.extend(per_sample_loss.detach().cpu().numpy())
+                        representations.extend(result.get("representations", None).detach().cpu().numpy())
+                    else:
+                        raise RuntimeError("Per-sample loss is not available")
+                        # fallback: use mean loss for all samples in batch
+                        n_samples = batch["subject_ids"].shape[0]
+                        losses.extend([loss.item()] * n_samples)
+            return np.array(losses), np.array(representations)
+        # def compute_per_sample_losses(dataset, processor, model):
+        #     losses = []
+        #     for i in tqdm(range(len(dataset))):
+        #         batch_dict = dataset[i]
+        #         n_samples = len(batch_dict['subject_ids'])
+        #         for j in tqdm(range(n_samples)):
+        #             single_sample = {k: v[j:j+1] if isinstance(v, np.ndarray) and v.shape[0] == n_samples else v
+        #                              for k, v in batch_dict.items()}
+        #             batch = processor.collate([single_sample])
+        #             batch = to_device(batch["batch"], model.device)
+        #             with torch.no_grad():
+        #                 loss, _ = model(batch)
+        #                 if isinstance(loss, torch.Tensor):
+        #                     losses.append(loss.item())
+        #                 else:
+        #                     losses.append(float(loss))
+        #     return np.array(losses)
+
+        if args.loss_level == "batch":
+            compute_loss_fn = compute_per_batch_losses
+            loss_label = "batch"
+        else:
+            compute_loss_fn = compute_per_sample_losses
+            loss_label = "sample"
+
+        if not os.path.exists(train_loss_file) or not os.path.exists(train_representations_file):
+            print(f"Computing per-{loss_label} loss for train set (random k)...")
+            train_losses, train_representations = compute_loss_fn(subset_train_batches, processor, model)
             np.save(train_loss_file, train_losses)
+            np.save(train_representations_file, train_representations)
             print(f"Saved train losses to {train_loss_file}")
         else:
             print(f"Loading existing train losses from {train_loss_file}")
             train_losses = np.load(train_loss_file)
-
-        if not os.path.exists(val_loss_file):
-            print("Computing per-batch loss for val set (random k)...")
-            val_losses = compute_per_batch_losses(subset_val_batches, processor, model)
+            train_representations = np.load(train_representations_file)
+        if not os.path.exists(val_loss_file) or not os.path.exists(val_representations_file):
+            print(f"Computing per-{loss_label} loss for val set (random k)...")
+            val_losses, val_representations = compute_loss_fn(subset_val_batches, processor, model)
             np.save(val_loss_file, val_losses)
+            np.save(val_representations_file, val_representations)
             print(f"Saved val losses to {val_loss_file}")
         else:
             print(f"Loading existing val losses from {val_loss_file}")
             val_losses = np.load(val_loss_file)
+            val_representations = np.load(val_representations_file)
             print(val_losses)
+
+        if args.loss_level == "sample":
+            train_losses = train_losses.mean(axis=(1,2))
+            val_losses = val_losses.mean(axis=(1,2))
+        print(train_losses.shape)
+        print(val_losses.shape)
+        print(train_representations.shape)
+        print(val_representations.shape)
 
         # Plot histogram
         plt.figure(figsize=(8, 5))
@@ -242,8 +307,9 @@ def main():
         plt.title(f'Loss Distribution: Train vs Validation (Random {k})')
         plt.legend()
         plt.tight_layout()
-        plt.savefig('loss_distribution_comparison.png')
-        print("Saved loss distribution plot to loss_distribution_comparison.png")
+        fig_name = f'loss_distribution_comparison_{args.loss_level}_{k}.png'
+        plt.savefig(fig_name)
+        print(f"Saved loss distribution plot to {fig_name}")
         plt.close()
     else:
         train_result = trainer.train(resume_from_checkpoint=args.checkpoint_dir)

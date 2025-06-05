@@ -250,8 +250,8 @@ class MOTORTaskHead(nn.Module):
         # Force to always be negative
         # time_dependent_logits = -F.softplus(-time_dependent_logits)
 
-        survival_loss = torch.exp2(time_dependent_logits + batch["log_time"]).mean()
-        event_loss = -math.log(2) * torch.where(batch["is_event"], time_dependent_logits, 0).mean()
+        survival_loss = torch.exp2(time_dependent_logits + batch["log_time"])
+        event_loss = -math.log(2) * torch.where(batch["is_event"], time_dependent_logits, 0)
 
         # with torch.autocast(device_type="cuda", enabled=False):
         #     actual = torch.exp2(time_dependent_logits.type(torch.float32) + batch["log_time"].type(torch.float32))
@@ -327,12 +327,13 @@ class MOTORTaskHead(nn.Module):
         # print(batch["log_time"])
         # print(self.task_layer.bias.unsqueeze(0).unsqueeze(0) + batch["log_time"])
 
-        loss = survival_loss + event_loss
+        per_sample_loss = survival_loss + event_loss
+        loss = survival_loss.mean() + event_loss.mean()
 
         if not return_logits:
             time_dependent_logits = None
 
-        return loss, {"time_dependent_logits": time_dependent_logits}
+        return loss, {"per_sample_loss": per_sample_loss, "time_dependent_logits": time_dependent_logits}
 
 
 def remove_first_dimension(data: Any) -> Any:

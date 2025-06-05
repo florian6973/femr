@@ -18,6 +18,10 @@ assert os.path.exists(val_loss_file), f"File not found: {val_loss_file}"
 train_losses = np.load(train_loss_file)
 val_losses = np.load(val_loss_file)
 
+if train_losses.ndim == 3:
+    train_losses = train_losses.mean(axis=(1,2))
+    val_losses = val_losses.mean(axis=(1,2))
+
 # Split each into two halves
 def split_half(arr):
     n = len(arr)
