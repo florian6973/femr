@@ -179,11 +179,13 @@ def main():
         model.eval()
         random.seed(42)
         k = 5000
-        # Randomly select 100 indices from train and val
+
+        # Randomly select k indices from train and val
         train_indices = random.sample(range(len(train_batches)), min(k, len(train_batches)))
         val_indices = random.sample(range(len(val_batches)), min(k, len(val_batches)))
         subset_train_batches = train_batches.select(train_indices)
         subset_val_batches = val_batches.select(val_indices)
+        
         # subset_train_batches = train_batches
         # subset_val_batches = val_batches
 
@@ -212,7 +214,7 @@ def main():
             return np.array(losses)
 
         if not os.path.exists(train_loss_file):
-            print("Computing per-batch loss for train set (random 100)...")
+            print("Computing per-batch loss for train set (random k)...")
             train_losses = compute_per_batch_losses(subset_train_batches, processor, model)
             np.save(train_loss_file, train_losses)
             print(f"Saved train losses to {train_loss_file}")
@@ -221,7 +223,7 @@ def main():
             train_losses = np.load(train_loss_file)
 
         if not os.path.exists(val_loss_file):
-            print("Computing per-batch loss for val set (random 100)...")
+            print("Computing per-batch loss for val set (random k)...")
             val_losses = compute_per_batch_losses(subset_val_batches, processor, model)
             np.save(val_loss_file, val_losses)
             print(f"Saved val losses to {val_loss_file}")
@@ -243,12 +245,11 @@ def main():
         plt.savefig('loss_distribution_comparison.png')
         print("Saved loss distribution plot to loss_distribution_comparison.png")
         plt.close()
-        return
-
-    train_result = trainer.train(resume_from_checkpoint=args.checkpoint_dir)
-    trainer.log_metrics("train", train_result.metrics)
-    trainer.save_metrics("train", train_result.metrics)
-    trainer.save_state()
+    else:
+        train_result = trainer.train(resume_from_checkpoint=args.checkpoint_dir)
+        trainer.log_metrics("train", train_result.metrics)
+        trainer.save_metrics("train", train_result.metrics)
+        trainer.save_state()
 
 
 if __name__ == "__main__":
