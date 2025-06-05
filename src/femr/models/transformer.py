@@ -226,7 +226,7 @@ class MOTORTaskHead(nn.Module):
 
         self.task_layer = nn.Linear(self.final_layer_size, self.num_tasks)
         start_bias = torch.log2(torch.tensor([a[1] for a in pretraining_task_info], dtype=torch.float32))
-        self.task_layer.bias.data = start_bias
+        self.task_layer.bias.data = start_bias.to(self.task_layer.bias.data.device)
 
         self.task_time_bias = nn.Parameter(torch.zeros(1, self.num_time_bins, self.num_tasks))
 
@@ -378,6 +378,11 @@ class FEMRModel(transformers.PreTrainedModel):
             raise RuntimeError("Could not determine head for task " + task_type)
 
     def forward(self, batch: Mapping[str, Any], return_loss=True, return_logits=False, return_reprs=False):
+        # If in eval mode and not explicitly told not to, return logits for predict
+        if not self.training and not return_logits:
+            # print("Returning logits for prediction")
+            return_logits = True
+
         # Need a return_loss parameter for transformers.Trainer to work properly
         assert return_loss
 
